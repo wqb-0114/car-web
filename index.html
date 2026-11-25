@@ -181,16 +181,37 @@
   /* ------------------------------------------------------------------ *
    *  BLE 常量：HC-08 / HM-10 用 FFE0+FFE1，部分模块用 Nordic UART
    * ------------------------------------------------------------------ */
-  var SVC_FFE0 = 0xFFE0, CHR_FFE1 = 0xFFE1;
-  var SVC_NUS = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
-  var CHR_NUS_TX = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
-  var CHR_NUS_RX = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+  var SERVICES = [
+    0xFFE0,                                     /* HM-10 / HC-08 */
+    0xFFF0,                                     /* 部分克隆模块 */
+    '6e400001-b5a3-f393-e0a9-e50e24dcca9e',     /* Nordic UART */
+    '49535343-fe7d-4ae5-8fa9-9fafd205e455'      /* ISSC / Microchip 透传 */
+  ];
 
-  var txChar = null, rxChar = null, device = null, connected = false;
+  var txChar = null, rxChar = null, device = null, gatt = null;
+  var connected = false;
   var encoder = new TextEncoder();
+  var diagText = '';
 
+  var logBuf = [];
   function logLine(s) {
-    logEl.textContent = s;
+    logBuf.push(s);
+    if (logBuf.length > 3) { logBuf.shift(); }
+    logEl.textContent = logBuf.join('\n');
+  }
+
+  function shortUuid(u) {
+    if (u.length === 36 && u.slice(4, 8) === '0000') { return u.slice(4, 8); }
+    return u.slice(0, 8);
+  }
+
+  function propStr(p) {
+    var s = '';
+    if (p.read) { s += 'r'; }
+    if (p.write) { s += 'w'; }
+    if (p.writeWithoutResponse) { s += 'W'; }
+    if (p.notify) { s += 'n'; }
+    return s;
   }
 
   function setChip(text, cls) {
@@ -217,47 +238,98 @@
   /* ------------------------------------------------------------------ *
    *  连接 / 断开
    * ------------------------------------------------------------------ */
-  async function connect() {
-    if (!navigator.bluetooth) {
-      setChip('浏览器不支持 Web Bluetooth', 'bad');
-      alert('这个浏览器不支持 Web Bluetooth。\n请用电脑或安卓的 Chrome / Edge 打开（iOS 需要 Bluefy 之类的浏览器）。');
-      return;
+  /* 遍历所有能访问的服务，自己找"可写特征值"，不写死 FFE1 */
+  async function pickChannel(server) {
+    var svcs = await server.getPrimaryServices();
+    var desc = [];
+    var i, j;
+    for (i = 0; i < svcs.length; i++) {
+      var chs = [];
+      try { chs = await svcs[i].getCharacteristics(); } catch (e) { chs = []; }
+      var part = [];
+      for (j = 0; j < chs.length; j++) {
+        var p = chs[j].properties || {};
+        part.push(shortUuid(chs[j].uuid) + '(' + propStr(p) + ')');
+        if (!txChar && (p.write || p.writeWithoutResponse)) { txChar = chs[j]; }
+        if (!rxChar && p.notify) { rxChar = chs[j]; }
+      }
+      desc.push(shortUuid(svcs[i].uuid) + ':' + part.join(' '));
     }
+    diagText = '服务 ' + desc.join(' | ');
+    logLine(diagText);
+    return txChar !== null;
+  }
+
+  function showFail(title, info) {
+    var el = document.getElementById('notice');
+    el.hidden = false;
+    el.innerHTML = '<b>' + title + '</b><br>' +
+      String(info).replace(/&/g, '&amp;').replace(/</g, '&lt;') +
+      (diagText ? '<br><span class="step">' + diagText + '</span>' : '') +
+      '<br>常见原因：① HC-08 被别的 App 或系统蓝牙占着 ② 模块其实是 HC-05/06（经典蓝牙，网页连不了）' +
+      '③ 距离太远 / 没上电 ④ 其他标签页也连着它';
+  }
+
+  async function connect() {
+    if (!navigator.bluetooth) { explainNoBluetooth(); return; }
+
+    if (navigator.bluetooth.getAvailability) {
+      try {
+        var avail = await navigator.bluetooth.getAvailability();
+        if (!avail) {
+          setChip('手机蓝牙没开', 'bad');
+          showFail('手机蓝牙没打开', '先在系统里打开蓝牙，再点连接。');
+          return;
+        }
+      } catch (e0) {}
+    }
+
+    document.getElementById('notice').hidden = true;
+    txChar = null;
+    rxChar = null;
+    diagText = '';
+
     try {
       setChip('正在搜索设备…');
+      logLine('请选择 HC-08');
       device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
-        optionalServices: [SVC_FFE0, SVC_NUS]
+        optionalServices: SERVICES
       });
       device.addEventListener('gattserverdisconnected', onDisconnected);
 
       setChip('正在连接…');
-      var server = await device.gatt.connect();
+      logLine('连接 ' + (device.name || '设备') + ' …');
+      gatt = device.gatt;
 
-      var ch = null;
+      var server = null;
       try {
-        var s1 = await server.getPrimaryService(SVC_FFE0);
-        ch = await s1.getCharacteristic(CHR_FFE1);
-        try { rxChar = ch; } catch (e) {}
-      } catch (e1) {
-        var s2 = await server.getPrimaryService(SVC_NUS);
-        ch = await s2.getCharacteristic(CHR_NUS_TX);
-        try { rxChar = await s2.getCharacteristic(CHR_NUS_RX); } catch (e2) {}
+        server = await gatt.connect();
+      } catch (eC) {
+        /* 模块被占用时第一次常失败，断开重试一次 */
+        logLine('重试连接…');
+        try { gatt.disconnect(); } catch (eD) {}
+        await new Promise(function (r) { setTimeout(r, 600); });
+        server = await gatt.connect();
       }
 
-      txChar = ch;
-      connected = true;
-      setChip('已连接：' + (device.name || 'BLE 设备'), 'ok');
-      btnEl.textContent = '断开连接';
-      logLine('已连接，发送 S 停车');
+      setChip('正在找串口服务…');
+      var ok = await pickChannel(server);
+      if (!ok) {
+        throw new Error('模块里没有可写特征值');
+      }
 
-      /* 订阅通知（遥测用），失败不影响控制 */
+      connected = true;
+      btnEl.textContent = '断开连接';
+      setChip('已连接：' + (device.name || 'BLE 设备'), 'ok');
+      logLine('已连接 ' + shortUuid(txChar.uuid));
+
       if (rxChar && rxChar.properties && rxChar.properties.notify) {
         try {
           await rxChar.startNotifications();
           rxChar.addEventListener('characteristicvaluechanged', function (ev) {
-            var dv = ev.target.value, s = '', i;
-            for (i = 0; i < dv.byteLength; i++) { s += String.fromCharCode(dv.getUint8(i)); }
+            var dv = ev.target.value, s = '', k;
+            for (k = 0; k < dv.byteLength; k++) { s += String.fromCharCode(dv.getUint8(k)); }
             logLine('← ' + s.trim());
           });
         } catch (e3) {}
@@ -265,12 +337,15 @@
 
       send('S\r\n');
       send(steerMode === 'servo' ? 'M1\r\n' : 'M0\r\n');
-      setChip('已连接：' + (device.name || 'BLE 设备'), 'ok');
     } catch (err) {
       if (err && err.name === 'NotFoundError') { setChip('已取消'); return; }
       console.warn(err);
+      var info = ((err && err.name) || '错误') + '：' +
+                 ((err && err.message) ? err.message : String(err));
+      if (err && err.code !== undefined) { info += '（code ' + err.code + '）'; }
       setChip('连接失败', 'bad');
-      alert('连接失败：' + (err && err.message ? err.message : err));
+      logLine(info);
+      showFail('连接失败', info);
     }
   }
 
