@@ -255,19 +255,28 @@
       }
       desc.push(shortUuid(svcs[i].uuid) + ':' + part.join(' '));
     }
-    diagText = '服务 ' + desc.join(' | ');
+    diagText = (device && device.name ? device.name + '｜' : '') +
+               '服务 ' + desc.join(' | ');
     logLine(diagText);
     return txChar !== null;
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>');
   }
 
   function showFail(title, info) {
     var el = document.getElementById('notice');
     el.hidden = false;
-    el.innerHTML = '<b>' + title + '</b><br>' +
-      String(info).replace(/&/g, '&amp;').replace(/</g, '&lt;') +
-      (diagText ? '<br><span class="step">' + diagText + '</span>' : '') +
-      '<br>常见原因：① HC-08 被别的 App 或系统蓝牙占着 ② 模块其实是 HC-05/06（经典蓝牙，网页连不了）' +
-      '③ 距离太远 / 没上电 ④ 其他标签页也连着它';
+    el.innerHTML = '<b>' + title + '</b><br>' + esc(info) +
+      (diagText ? '<br><span class="step">' + esc(diagText) + '</span>' : '') +
+      '<br>把上面整段发我就行。';
+  }
+
+  var stepName = '';
+  function setStep(s) {
+    stepName = s;
+    logLine('… ' + s);
   }
 
   async function connect() {
@@ -291,32 +300,35 @@
 
     try {
       setChip('正在搜索设备…');
-      logLine('请选择 HC-08');
+      setStep('选择设备');
       device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: SERVICES
       });
       device.addEventListener('gattserverdisconnected', onDisconnected);
+      diagText = '设备：' + (device.name || '?') + '（id ' + String(device.id || '').slice(0, 17) + '）';
 
       setChip('正在连接…');
-      logLine('连接 ' + (device.name || '设备') + ' …');
+      setStep('连接 GATT');
       gatt = device.gatt;
+      logLine('连接 ' + (device.name || '设备') + ' …');
 
       var server = null;
       try {
         server = await gatt.connect();
       } catch (eC) {
         /* 模块被占用时第一次常失败，断开重试一次 */
-        logLine('重试连接…');
+        logLine('第一次失败，重试…');
         try { gatt.disconnect(); } catch (eD) {}
-        await new Promise(function (r) { setTimeout(r, 600); });
+        await new Promise(function (r) { setTimeout(r, 700); });
         server = await gatt.connect();
       }
 
       setChip('正在找串口服务…');
+      setStep('读取服务与特征值');
       var ok = await pickChannel(server);
       if (!ok) {
-        throw new Error('模块里没有可写特征值');
+        throw new Error('模块里没有"可写"的特征值（见下面服务列表）');
       }
 
       connected = true;
@@ -324,6 +336,7 @@
       setChip('已连接：' + (device.name || 'BLE 设备'), 'ok');
       logLine('已连接 ' + shortUuid(txChar.uuid));
 
+      setStep('订阅通知');
       if (rxChar && rxChar.properties && rxChar.properties.notify) {
         try {
           await rxChar.startNotifications();
@@ -335,16 +348,25 @@
         } catch (e3) {}
       }
 
+      setStep('已连接');
       send('S\r\n');
       send(steerMode === 'servo' ? 'M1\r\n' : 'M0\r\n');
     } catch (err) {
-      if (err && err.name === 'NotFoundError') { setChip('已取消'); return; }
+      if (err && err.name === 'NotFoundError' && stepName === '选择设备') {
+        setChip('已取消');
+        return;
+      }
       console.warn(err);
-      var info = ((err && err.name) || '错误') + '：' +
+      var info = '步骤：' + (stepName || '?') + '\n' +
+                 '错误：' + ((err && err.name) || 'exception') + ' - ' +
                  ((err && err.message) ? err.message : String(err));
       if (err && err.code !== undefined) { info += '（code ' + err.code + '）'; }
+      if (err && err.stack) {
+        var st = String(err.stack).split('\n');
+        if (st.length > 1) { info += '\n' + st[1].trim().slice(0, 90); }
+      }
       setChip('连接失败', 'bad');
-      logLine(info);
+      logLine('失败：' + (stepName || '')); 
       showFail('连接失败', info);
     }
   }
