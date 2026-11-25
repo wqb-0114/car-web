@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#050b1e">
+<title>小车蓝牙摇杆遥控台</title>
+<style>
+  :root{
+    --bg1:#071233; --bg2:#03081a;
+    --card:rgba(255,255,255,.06);
+    --line:rgba(255,255,255,.12);
+    --txt:#e9eefc; --dim:#9aa9c9;
+    --ok:#22c55e; --bad:#ef4444; --blue:#4f8ef7;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    margin:0;
+    background:
+      radial-gradient(120% 70% at 50% 0%, #12275e 0%, var(--bg1) 45%, var(--bg2) 100%);
+    color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    display:flex;justify-content:center;
+    overscroll-behavior:none;user-select:none;-webkit-user-select:none;
+  }
+  .wrap{
+    width:100%;max-width:460px;min-height:100%;
+    padding:calc(14px + env(safe-area-inset-top)) 18px calc(18px + env(safe-area-inset-bottom));
+    display:flex;flex-direction:column;align-items:center;gap:10px;
+  }
+  h1{
+    margin:2px 0 0;font-size:21px;font-weight:700;letter-spacing:.5px;
+    display:flex;align-items:center;gap:8px;
+  }
+  h1 .car{font-size:22px;filter:drop-shadow(0 2px 6px rgba(255,80,80,.45))}
+
+  .chip{
+    display:inline-flex;align-items:center;gap:8px;
+    padding:7px 16px;border-radius:999px;font-size:14px;
+    background:rgba(255,255,255,.07);border:1px solid var(--line);color:var(--dim);
+    transition:.25s;
+  }
+  .chip .dot{width:8px;height:8px;border-radius:50%;background:#7b849e}
+  .chip.ok{background:rgba(34,197,94,.15);border-color:rgba(34,197,94,.5);color:#b6f3c9}
+  .chip.ok .dot{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+  .chip.bad{background:rgba(239,68,68,.15);border-color:rgba(239,68,68,.45);color:#ffc4c4}
+  .chip.bad .dot{background:var(--bad)}
+
+  button{font-family:inherit}
+  .btn{
+    border:0;border-radius:14px;padding:12px 30px;font-size:16px;font-weight:600;color:#fff;
+    background:linear-gradient(180deg,#8f8cf6,#6f6ae8);
+    box-shadow:0 8px 22px rgba(110,105,230,.35), inset 0 1px 0 rgba(255,255,255,.28);
+    cursor:pointer;transition:transform .1s, filter .2s;
+  }
+  .btn:active{transform:translateY(1px) scale(.99);filter:brightness(.95)}
+  .btn.ghost{background:rgba(255,255,255,.08);box-shadow:none;border:1px solid var(--line)}
+
+  .seg{
+    display:grid;grid-template-columns:1fr 1fr;gap:6px;width:100%;max-width:300px;
+    background:rgba(255,255,255,.06);border:1px solid var(--line);
+    border-radius:13px;padding:4px;
+  }
+  .seg button{
+    border:0;background:transparent;color:var(--dim);padding:9px 0;border-radius:10px;
+    font-size:13.5px;cursor:pointer;font-family:inherit;transition:.18s;
+  }
+  .seg button.on{
+    background:linear-gradient(180deg,rgba(143,140,246,.95),rgba(111,106,232,.95));
+    color:#fff;box-shadow:0 4px 14px rgba(110,105,230,.32);
+  }
+
+  .stage{
+    position:relative;width:100%;max-width:360px;aspect-ratio:1/1;margin-top:4px;
+  }
+  .stage::after{
+    content:"";position:absolute;inset:6%;border-radius:50%;
+    background:radial-gradient(circle at 50% 45%, rgba(70,110,255,.22), transparent 68%);
+    filter:blur(10px);pointer-events:none;
+  }
+  canvas#stick{position:relative;width:100%;height:100%;display:block;touch-action:none;z-index:1}
+
+  .hint{font-size:12.5px;color:var(--dim);letter-spacing:.5px;margin-top:-2px}
+  .hint b{color:#cfd8ee;font-weight:600}
+
+  .dash{
+    width:100%;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:2px;
+  }
+  .cell{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:8px 6px;text-align:center;
+  }
+  .cell span{display:block;font-size:11.5px;color:var(--dim);margin-bottom:3px}
+  .cell b{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+  #out{font-size:14px;letter-spacing:-.2px}
+  .cell b.g{color:#7ee2a8}
+  .cell b.r{color:#ff9c9c}
+  .cell b.b{color:#9dc0ff}
+
+  .tools{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;width:100%;margin-top:2px}
+  .tools button{
+    width:100%;padding:10px 0;font-size:13px;border-radius:12px;cursor:pointer;
+    background:rgba(255,255,255,.06);border:1px solid var(--line);color:#dbe4f7;
+    white-space:nowrap;
+  }
+  .tools button:active{background:rgba(255,255,255,.14)}
+
+  .tips{margin:6px 0 0;font-size:12.5px;line-height:1.75;color:var(--dim);text-align:center}
+  .tips .k{color:#cfd8ee}
+  .notice{
+    width:100%;margin-top:2px;padding:11px 13px;border-radius:13px;
+    background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.45);
+    color:#ffd9d9;font-size:12.5px;line-height:1.7;text-align:left;
+  }
+  .notice b{color:#fff}
+  .notice .step{color:#ffe9b0}
+  .log{
+    width:100%;margin-top:6px;padding:8px 10px;border-radius:10px;
+    background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.07);
+    font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:#8fa3c9;
+    min-height:34px;max-height:52px;overflow:hidden;white-space:pre-wrap;word-break:break-all;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="car">🚗</span>小车蓝牙摇杆遥控台</h1>
+
+  <div id="chip" class="chip"><span class="dot"></span><span id="chipText">未连接</span></div>
+  <div id="notice" class="notice" hidden></div>
+  <button id="btnConnect" class="btn">连接蓝牙</button>
+
+  <div class="seg" id="seg">
+    <button data-mode="servo" class="on">舵机转向</button>
+    <button data-mode="diff">差速转向</button>
+  </div>
+
+  <div class="stage"><canvas id="stick"></canvas></div>
+  <div class="hint">松手回中 = <b>停</b></div>
+
+  <div class="dash">
+    <div class="cell"><span>档位</span><b id="gear">停</b></div>
+    <div class="cell"><span id="steerLabel">方向盘</span><b id="steer">90°</b></div>
+    <div class="cell"><span>左右输出</span><b id="out">0 / 0</b></div>
+  </div>
+
+  <div class="tools">
+    <button data-cmd="A40">舵机左</button>
+    <button data-cmd="A90">舵机中</button>
+    <button data-cmd="A140">舵机右</button>
+    <button id="btnTel">遥测</button>
+  </div>
+
+  <p class="tips">
+    推上 = <span class="k">前进四档</span>（按行程四等分）· 推下 = <span class="k">倒车四档</span><br>
+    <span class="k">舵机转向</span>：左右推 = 打方向盘（两轮同速，像真车）<br>
+    <span class="k">差速转向</span>：左右推 = 左右轮差速（能原地转）· 松手 = 停<br>
+    蓝牙断开后固件 1.5 秒自动刹车 · 请用 Chrome / Edge 打开
+  </p>
+
+  <div id="log" class="log">未连接 …</div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ------------------------------------------------------------------ *
+   *  DOM
+   * ------------------------------------------------------------------ */
+  var $ = function (id) { return document.getElementById(id); };
+  var chipEl = $('chip'), chipText = $('chipText'), btnEl = $('btnConnect');
+  var gearEl = $('gear'), steerEl = $('steer'), outEl = $('out');
+  var steerLabel = $('steerLabel'), segEl = $('seg');
+  var logEl = $('log'), canvas = $('stick'), ctx = canvas.getContext('2d');
+
+  /* 'servo' = 舵机转向（默认）  'diff' = 差速转向 */
+  var steerMode = 'servo';
+
+  /* ------------------------------------------------------------------ *
+   *  BLE 常量：HC-08 / HM-10 用 FFE0+FFE1，部分模块用 Nordic UART
+   * ------------------------------------------------------------------ */
+  var SVC_FFE0 = 0xFFE0, CHR_FFE1 = 0xFFE1;
+  var SVC_NUS = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+  var CHR_NUS_TX = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+  var CHR_NUS_RX = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+
+  var txChar = null, rxChar = null, device = null, connected = false;
+  var encoder = new TextEncoder();
+
+  function logLine(s) {
+    logEl.textContent = s;
+  }
+
+  function setChip(text, cls) {
+    chipText.textContent = text;
+    chipEl.className = 'chip' + (cls ? ' ' + cls : '');
+  }
+
+  function writeStr(s) {
+    if (!txChar) return Promise.resolve();
+    var data = encoder.encode(s);
+    if (txChar.properties && txChar.properties.writeWithoutResponse) {
+      return txChar.writeValueWithoutResponse(data);
+    }
+    return txChar.writeValue(data);
+  }
+
+  var chain = Promise.resolve();
+  function send(s) {
+    if (!connected || !txChar) return;
+    chain = chain.then(function () { return writeStr(s); }).catch(function () {});
+    logLine('→ ' + s.replace(/\r\n$/, ''));
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  连接 / 断开
+   * ------------------------------------------------------------------ */
+  async function connect() {
+    if (!navigator.bluetooth) {
+      setChip('浏览器不支持 Web Bluetooth', 'bad');
+      alert('这个浏览器不支持 Web Bluetooth。\n请用电脑或安卓的 Chrome / Edge 打开（iOS 需要 Bluefy 之类的浏览器）。');
+      return;
+    }
+    try {
+      setChip('正在搜索设备…');
+      device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: [SVC_FFE0, SVC_NUS]
+      });
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+
+      setChip('正在连接…');
+      var server = await device.gatt.connect();
+
+      var ch = null;
+      try {
+        var s1 = await server.getPrimaryService(SVC_FFE0);
+        ch = await s1.getCharacteristic(CHR_FFE1);
+        try { rxChar = ch; } catch (e) {}
+      } catch (e1) {
+        var s2 = await server.getPrimaryService(SVC_NUS);
+        ch = await s2.getCharacteristic(CHR_NUS_TX);
+        try { rxChar = await s2.getCharacteristic(CHR_NUS_RX); } catch (e2) {}
+      }
+
+      txChar = ch;
+      connected = true;
+      setChip('已连接：' + (device.name || 'BLE 设备'), 'ok');
+      btnEl.textContent = '断开连接';
+      logLine('已连接，发送 S 停车');
+
+      /* 订阅通知（遥测用），失败不影响控制 */
+      if (rxChar && rxChar.properties && rxChar.properties.notify) {
+        try {
+          await rxChar.startNotifications();
+          rxChar.addEventListener('characteristicvaluechanged', function (ev) {
+            var dv = ev.target.value, s = '', i;
+            for (i = 0; i < dv.byteLength; i++) { s += String.fromCharCode(dv.getUint8(i)); }
+            logLine('← ' + s.trim());
+          });
+        } catch (e3) {}
+      }
+
+      send('S\r\n');
+      send(steerMode === 'servo' ? 'M1\r\n' : 'M0\r\n');
+      setChip('已连接：' + (device.name || 'BLE 设备'), 'ok');
+    } catch (err) {
+      if (err && err.name === 'NotFoundError') { setChip('已取消'); return; }
+      console.warn(err);
+      setChip('连接失败', 'bad');
+      alert('连接失败：' + (err && err.message ? err.message : err));
+    }
+  }
+
+  function onDisconnected() {
+    connected = false;
+    txChar = null;
+    rxChar = null;
+    setChip('已断开', 'bad');
+    btnEl.textContent = '连接蓝牙';
+    state.x = 0; state.y = 0;
+    curL = 0; curR = 0; curA = 90; tgtL = 0; tgtR = 0; tgtA = 90;
+    lastSentL = 0; lastSentR = 0; lastSentA = 90;
+    stoppedSent = true;
+    logLine('连接已断开，小车会在 1.5 秒后自动刹车');
+  }
+
+  btnEl.addEventListener('click', function () {
+    if (connected && device && device.gatt.connected) {
+      device.gatt.disconnect();
+      onDisconnected();
+    } else {
+      connect();
+    }
+  });
+
+  /* 舵机 / 遥测按钮 */
+  Array.prototype.forEach.call(document.querySelectorAll('.tools button[data-cmd]'), function (b) {
+    b.addEventListener('click', function () { send(b.getAttribute('data-cmd') + '\r\n'); });
+  });
+  $('btnTel').addEventListener('click', function () { send('T\r\n'); });
+
+  /* 转向方式切换：网页自己算，同时也发 M1/M0 让固件的 L/R 键跟上 */
+  Array.prototype.forEach.call(segEl.querySelectorAll('button'), function (b) {
+    b.addEventListener('click', function () {
+      if (b.classList.contains('on')) return;
+      Array.prototype.forEach.call(segEl.querySelectorAll('button'), function (x) {
+        x.classList.remove('on');
+      });
+      b.classList.add('on');
+      steerMode = b.getAttribute('data-mode');
+      state.x = 0; state.y = 0;
+      send(steerMode === 'servo' ? 'M1\r\n' : 'M0\r\n');
+    });
+  });
+
+  /* ------------------------------------------------------------------ *
+   *  摇杆
+   * ------------------------------------------------------------------ */
+  var state = { x: 0, y: 0, kx: 0, ky: 0, active: false };
+  var W = 0, H = 0, CX = 0, CY = 0, R = 0;
+
+  function layout() {
+    var rect = canvas.getBoundingClientRect();
+    var dpr = Math.min(window.devicePixelRatio || 1, 3);
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    W = rect.width; H = rect.height;
+    CX = W / 2; CY = H / 2;
+    R = Math.min(W, H) / 2 - 4;
+  }
+
+  function pointerVec(e) {
+    var rect = canvas.getBoundingClientRect();
+    var maxR = R * 0.72;
+    var x = (e.clientX - rect.left - CX) / maxR;
+    var y = -(e.clientY - rect.top - CY) / maxR;
+    var m = Math.sqrt(x * x + y * y);
+    if (m > 1) { x /= m; y /= m; }
+    state.x = x;
+    state.y = y;
+  }
+
+  canvas.addEventListener('pointerdown', function (e) {
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+    state.active = true;
+    pointerVec(e);
+    e.preventDefault();
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    if (!state.active) return;
+    pointerVec(e);
+    e.preventDefault();
+  });
+  function release(e) {
+    if (!state.active) return;
+    state.active = false;
+    state.x = 0;
+    state.y = 0;
+    if (e) e.preventDefault();
+  }
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('pointerleave', function (e) { if (state.active) release(e); });
+
+  /* ------------------------------------------------------------------ *
+   *  摇杆 → 左右轮占空比
+   *    推上/下：|y| 四等分 = 1~4 档，每档 25%
+   *    左右   ：差速转向，最多把内侧轮压到 20%
+   *    只左右推且没有前后：原地转向
+   * ------------------------------------------------------------------ */
+  var MAX_STEP = 16;           /* 每 50ms 最多变 16%，换向不会硬冲 */
+  var MAX_ANG = 9;             /* 每 50ms 舵机最多转 9°，约 180°/s */
+  var curL = 0, curR = 0, curA = 90, tgtL = 0, tgtR = 0, tgtA = 90;
+  var lastSentL = 0, lastSentR = 0, lastSentA = 90, lastSentAt = 0;
+  var stoppedSent = true;
+
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  function ramp(cur, tgt) {
+    var d = tgt - cur;
+    if (Math.abs(d) <= MAX_STEP) return tgt;
+    return cur + (d > 0 ? MAX_STEP : -MAX_STEP);
+  }
+  function rampAng(cur, tgt) {
+    var d = tgt - cur;
+    if (Math.abs(d) <= MAX_ANG) return tgt;
+    return cur + (d > 0 ? MAX_ANG : -MAX_ANG);
+  }
+
+  /* 摇杆 -> {左右轮占空比, 舵机角度} */
+  function mapping() {
+    var x = state.x, y = state.y;
+    var m = Math.sqrt(x * x + y * y);
+    var gear = 0, dir = 0, turn = 0, l = 0, r = 0, ang = 90;
+
+    if (m > 0.10) {
+      var mm = Math.min(1, (m - 0.10) / 0.90);     /* 去掉死区后重新归一化 */
+      var ay = Math.abs(y) / (m || 1);              /* 前后分量占比 */
+      var ax = Math.abs(x) / (m || 1);
+      turn = clamp(x, -1, 1);
+
+      if (steerMode === 'servo') {
+        /* 舵机转向：两轮永远同速，左右推只动方向盘 */
+        ang = 90 + turn * 42;
+        if (ay * mm > 0.12) {
+          gear = clamp(Math.ceil(Math.abs(y) * 4), 1, 4);
+          dir = y >= 0 ? 1 : -1;
+          l = dir * gear * 25;
+          r = l;
+        }
+      } else {
+        /* 差速转向：左右轮一快一慢 */
+        if (ay * mm > 0.10) {
+          gear = clamp(Math.ceil(Math.abs(y) * 4), 1, 4);
+          dir = y >= 0 ? 1 : -1;
+          var base = gear * 25;
+          var k = 0.8;
+          l = dir * base * (1 - k * turn);
+          r = dir * base * (1 + k * turn);
+        } else if (ax * mm > 0.10) {
+          l = -turn * 60;
+          r = turn * 60;
+          gear = 0;
+          dir = 0;
+        }
+      }
+    }
+    return {
+      l: clamp(Math.round(l), -100, 100),
+      r: clamp(Math.round(r), -100, 100),
+      a: clamp(Math.round(ang), 20, 160),
+      gear: gear, dir: dir, turn: turn
+    };
+  }
+
+  function updateDash(m) {
+    var g = '', cls = '';
+    if (m.dir > 0) { g = '前进 ' + m.gear + ' 档'; cls = 'g'; }
+    else if (m.dir < 0) { g = '倒车 ' + m.gear + ' 档'; cls = 'r'; }
+    else if (steerMode === 'diff' && Math.abs(m.turn) > 0.15) { g = '原地转'; cls = 'b'; }
+    else { g = '停'; }
+
+    gearEl.textContent = g;
+    gearEl.className = cls;
+
+    if (steerMode === 'servo') {
+      var off = m.a - 90;
+      steerEl.textContent = Math.round(m.a) + '°';
+      steerEl.className = Math.abs(off) > 3 ? 'b' : '';
+      steerLabel.textContent = Math.abs(off) > 3 ? (off < 0 ? '方向盘 左' : '方向盘 右') : '方向盘 中';
+    } else {
+      var st = '直行';
+      if (m.turn > 0.15) st = (m.dir === 0 && m.gear === 0) ? '原地右转' : '右转';
+      else if (m.turn < -0.15) st = (m.dir === 0 && m.gear === 0) ? '原地左转' : '左转';
+      steerEl.textContent = st;
+      steerEl.className = (m.turn > 0.15 || m.turn < -0.15) ? 'b' : '';
+      steerLabel.textContent = '转向';
+    }
+
+    outEl.textContent = (m.l > 0 ? '+' : '') + m.l + ' / ' + (m.r > 0 ? '+' : '') + m.r;
+  }
+
+  function controlTick() {
+    var m = mapping();
+    tgtL = m.l;
+    tgtR = m.r;
+    tgtA = (steerMode === 'servo') ? m.a : 90;
+
+    curL = ramp(curL, tgtL);
+    curR = ramp(curR, tgtR);
+    curA = rampAng(curA, tgtA);
+
+    updateDash({ l: curL, r: curR, a: curA, gear: m.gear, dir: m.dir, turn: m.turn });
+
+    var now = performance.now();
+    var idle = (curL === 0 && curR === 0 && Math.abs(curA - 90) <= 1);
+
+    if (idle) {
+      if (!stoppedSent) {
+        send('S\r\n');
+        stoppedSent = true;
+        lastSentL = 0; lastSentR = 0; lastSentA = 90; lastSentAt = now;
+      }
+      return;
+    }
+    stoppedSent = false;
+
+    var changed = Math.abs(curL - lastSentL) >= 2 ||
+                  Math.abs(curR - lastSentR) >= 2 ||
+                  Math.abs(curA - lastSentA) >= 2;
+
+    if (changed || (now - lastSentAt) > 250) {
+      if (Math.abs(curA - 90) <= 1) {
+        send('D' + curL + ',' + curR + '\r\n');
+      } else {
+        send('D' + curL + ',' + curR + ',' + curA + '\r\n');
+      }
+      lastSentL = curL; lastSentR = curR; lastSentA = curA; lastSentAt = now;
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  绘制
+   * ------------------------------------------------------------------ */
+  function rad(deg) { return (deg - 90) * Math.PI / 180; }
+
+  function wedge(a0, a1, r0, r1, fill, stroke, lw) {
+    ctx.beginPath();
+    ctx.arc(CX, CY, r1, rad(a0), rad(a1), false);
+    ctx.arc(CX, CY, r0, rad(a1), rad(a0), true);
+    ctx.closePath();
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 1.5; ctx.stroke(); }
+  }
+
+  var SECTORS = [
+    { a0: -44, a1: 44,   name: '前', base: 'rgba(34,197,94,.14)',  hot: 'rgba(34,197,94,.50)',  edge: 'rgba(34,197,94,.45)'  },
+    { a0: 46,  a1: 134,  name: '右', base: 'rgba(79,142,247,.12)', hot: 'rgba(79,142,247,.45)', edge: 'rgba(79,142,247,.40)' },
+    { a0: 136, a1: 224,  name: '后', base: 'rgba(239,68,68,.12)',  hot: 'rgba(239,68,68,.45)',  edge: 'rgba(239,68,68,.40)'  },
+    { a0: 226, a1: 316,  name: '左', base: 'rgba(79,142,247,.12)', hot: 'rgba(79,142,247,.45)', edge: 'rgba(79,142,247,.40)' }
+  ];
+
+  var activeSector = -1, activeBand = -1;
+
+  function pickSector(x, y) {
+    if (Math.sqrt(x * x + y * y) < 0.12) return -1;
+    var ang = Math.atan2(x, y) * 180 / Math.PI;      /* 0=上，顺时针为正 */
+    if (ang >= -44 && ang <= 44) return 0;
+    if (ang >= 46 && ang <= 134) return 1;
+    if (ang >= 136 || ang <= -136) return 2;
+    if (ang >= -134 && ang <= -46) return 3;
+    return -1;
+  }
+
+  function draw() {
+    /* 摇杆平滑跟随 */
+    state.kx += (state.x - state.kx) * 0.32;
+    state.ky += (state.y - state.ky) * 0.32;
+
+    ctx.clearRect(0, 0, W, H);
+
+    var rOut = R * 0.98;
+    var rIn = R * 0.34;
+    var g = ctx.createRadialGradient(CX, CY, R * 0.2, CX, CY, rOut);
+    g.addColorStop(0, 'rgba(255,255,255,.05)');
+    g.addColorStop(1, 'rgba(255,255,255,.015)');
+    ctx.beginPath();
+    ctx.arc(CX, CY, rOut, 0, Math.PI * 2);
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.10)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    activeSector = pickSector(state.x, state.y);
+    var m = mapping();
+    activeBand = (activeSector === 0 || activeSector === 2) ? m.gear : -1;
+
+    var i;
+    for (i = 0; i < 4; i++) {
+      var s = SECTORS[i];
+      var hot = (i === activeSector);
+      wedge(s.a0, s.a1, rIn, rOut, hot ? s.hot : s.base, s.edge, hot ? 2 : 1);
+    }
+
+    /* 档位环（前后两个扇区里的 3 条分界线） */
+    var bandH = (rOut - rIn) / 4;
+    var b;
+    ctx.strokeStyle = 'rgba(255,255,255,.12)';
+    ctx.lineWidth = 1;
+    for (b = 1; b <= 3; b++) {
+      var rr = rIn + bandH * b;
+      ctx.beginPath();
+      ctx.arc(CX, CY, rr, rad(-44), rad(44), false);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(CX, CY, rr, rad(136), rad(224), false);
+      ctx.stroke();
+    }
+
+    /* 当前档位高亮 */
+    if (activeBand > 0) {
+      var a0 = (activeSector === 0) ? -43 : 137;
+      var a1 = (activeSector === 0) ? 43 : 223;
+      wedge(a0, a1, rIn + bandH * (activeBand - 1), rIn + bandH * activeBand,
+            'rgba(255,255,255,.20)', 'rgba(255,255,255,.55)', 1.5);
+    }
+
+    /* 扇区文字 */
+    ctx.font = '600 13px -apple-system,"PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (i = 0; i < 4; i++) {
+      var ang = i === 0 ? 0 : (i === 1 ? 90 : (i === 2 ? 180 : 270));
+      var lr = rOut * 0.9;
+      var lx = CX + Math.sin(ang * Math.PI / 180) * lr;
+      var ly = CY - Math.cos(ang * Math.PI / 180) * lr;
+      ctx.fillStyle = (i === activeSector) ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.55)';
+      ctx.fillText(SECTORS[i].name, lx, ly);
+    }
+
+    /* 档位数字（偏开中轴线，避免和"前/后"字打架） */
+    ctx.font = '600 10px ui-monospace,Consolas,monospace';
+    for (b = 0; b < 4; b++) {
+      var mid = rIn + bandH * (b + 0.5);
+      var aF = 24 * Math.PI / 180, aB = (180 + 24) * Math.PI / 180;
+      ctx.fillStyle = 'rgba(255,255,255,.34)';
+      ctx.fillText(String(b + 1), CX + Math.sin(aF) * mid, CY - Math.cos(aF) * mid);
+      ctx.fillText(String(b + 1), CX + Math.sin(aB) * mid, CY - Math.cos(aB) * mid);
+    }
+
+    /* 中心到摇杆的连线 */
+    var kx = CX + state.kx * R * 0.72;
+    var ky = CY - state.ky * R * 0.72;
+    ctx.beginPath();
+    ctx.moveTo(CX, CY);
+    ctx.lineTo(kx, ky);
+    ctx.strokeStyle = 'rgba(255,255,255,.18)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    /* 摇杆头 */
+    var kr = R * 0.155;
+    ctx.save();
+    ctx.shadowColor = 'rgba(250,204,21,.55)';
+    ctx.shadowBlur = 18;
+    var kg = ctx.createRadialGradient(kx - kr * 0.3, ky - kr * 0.3, kr * 0.15, kx, ky, kr);
+    kg.addColorStop(0, '#fff3b0');
+    kg.addColorStop(0.55, '#fbbf24');
+    kg.addColorStop(1, '#e08a00');
+    ctx.beginPath();
+    ctx.arc(kx, ky, kr, 0, Math.PI * 2);
+    ctx.fillStyle = kg;
+    ctx.fill();
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(kx, ky, kr, 0, Math.PI * 2);
+    ctx.strokeStyle = '#fde68a';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    /* 中心小点 */
+    ctx.beginPath();
+    ctx.arc(CX, CY, 4, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,.35)';
+    ctx.fill();
+
+    requestAnimationFrame(draw);
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  启动
+   * ------------------------------------------------------------------ */
+  function start() {
+    layout();
+    requestAnimationFrame(draw);
+    setInterval(controlTick, 50);
+    setInterval(function () {                       /* 窗口尺寸变化时重排 */
+      if (canvas.clientWidth !== W) layout();
+    }, 800);
+
+    if (!navigator.bluetooth) {
+      explainNoBluetooth();
+    } else {
+      logEl.textContent = '点“连接蓝牙”，在列表里选 HC-08';
+    }
+  }
+
+  /* 不能用的原因要说到点子上，别只甩一句"不支持" */
+  function explainNoBluetooth() {
+    var el = document.getElementById('notice');
+    var host = location.hostname || '192.168.x.x';
+    var httpUrl = 'http://' + host + ':8080';
+    var html;
+
+    if (!window.isSecureContext) {
+      html = '<b>蓝牙接口被浏览器藏起来了</b><br>' +
+             '当前页面不是「安全上下文」：你用的是 https 自签名证书，Chrome 不信任它。' +
+             '<br><span class="step">办法一（最快）</span>：改开 <b>' + httpUrl + '</b>，' +
+             '然后地址栏输入 <b>chrome://flags</b> → 搜 <b>Insecure origins</b> → ' +
+             '把 ' + httpUrl + ' 填进去 → 选 Enabled → 重启 Chrome。' +
+             '<br><span class="step">办法二</span>：把 index.html 放到 GitHub Pages（有正规证书），手机直接打开。';
+    } else if (/MicroMessenger|QQ\/|Weibo|Alipay|DingTalk/i.test(navigator.userAgent)) {
+      html = '<b>这是 App 内置浏览器</b><br>蓝牙被内置浏览器禁用了，' +
+             '点右上角「···」→「在浏览器中打开」，或者复制链接到 <b>Chrome</b> 里打开。';
+    } else {
+      html = '<b>这个浏览器不支持 Web Bluetooth</b><br>' +
+             '请用 <b>Chrome / Edge</b> 打开（iOS 的 Safari 不支持，要用 Bluefy）。';
+    }
+
+    el.innerHTML = html;
+    el.hidden = false;
+    setChip('蓝牙不可用', 'bad');
+  }
+
+  window.addEventListener('resize', function () { layout(); });
+  window.addEventListener('orientationchange', function () { setTimeout(layout, 200); });
+
+  start();
+})();
+</script>
+</body>
+</html>
