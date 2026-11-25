@@ -156,7 +156,7 @@
     推上 = <span class="k">前进四档</span>（按行程四等分）· 推下 = <span class="k">倒车四档</span><br>
     <span class="k">舵机转向</span>：左右推 = 打方向盘（两轮同速，像真车）<br>
     <span class="k">差速转向</span>：左右推 = 左右轮差速（能原地转）· 松手 = 停<br>
-    蓝牙断开后固件 1.5 秒自动刹车 · 请用 Chrome / Edge 打开
+    蓝牙断开后固件 1.5 秒自动刹车 · 安卓用 Chrome，iPhone 用 <span class="k">Bluefy</span>
   </p>
 
   <div id="log" class="log">未连接 …</div>
@@ -181,11 +181,23 @@
   /* ------------------------------------------------------------------ *
    *  BLE 常量：HC-08 / HM-10 用 FFE0+FFE1，部分模块用 Nordic UART
    * ------------------------------------------------------------------ */
-  var SERVICES = [
-    0xFFE0,                                     /* HM-10 / HC-08 */
-    0xFFF0,                                     /* 部分克隆模块 */
-    '6e400001-b5a3-f393-e0a9-e50e24dcca9e',     /* Nordic UART */
-    '49535343-fe7d-4ae5-8fa9-9fafd205e455'      /* ISSC / Microchip 透传 */
+  /* 统一用 128 位标准 UUID 字符串：Bluefy 对 16 位短 UUID 支持不稳 */
+  function U(s) { return '0000' + s + '-0000-1000-8000-00805f9b34fb'; }
+  var UUID_FFE0 = U('ffe0'), UUID_FFE1 = U('ffe1');
+  var UUID_FFF0 = U('fff0'), UUID_FFF1 = U('fff1');
+  var UUID_NUS_SVC = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+  var UUID_NUS_TX  = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+  var UUID_ISSC_SVC = '49535343-fe7d-4ae5-8fa9-9fafd205e455';
+  var UUID_ISSC_TX  = '49535343-8841-43f4-a8d4-ecbe34729bb3';
+
+  var SERVICES = [UUID_FFE0, UUID_FFF0, UUID_NUS_SVC, UUID_ISSC_SVC];
+
+  /* 常见透传模块的 服务+特征值 组合，按顺序精确尝试（对 Bluefy 最稳） */
+  var KNOWN = [
+    { svc: UUID_FFE0, chr: UUID_FFE1 },
+    { svc: UUID_FFF0, chr: UUID_FFF1 },
+    { svc: UUID_NUS_SVC, chr: UUID_NUS_TX },
+    { svc: UUID_ISSC_SVC, chr: UUID_ISSC_TX }
   ];
 
   var txChar = null, rxChar = null, device = null, gatt = null;
@@ -222,10 +234,15 @@
   function writeStr(s) {
     if (!txChar) return Promise.resolve();
     var data = encoder.encode(s);
-    if (txChar.properties && txChar.properties.writeWithoutResponse) {
-      return txChar.writeValueWithoutResponse(data);
-    }
-    return txChar.writeValue(data);
+    /* 有的实现（比如 Bluefy）不支持 writeWithoutResponse，失败就退回 writeValue */
+    return Promise.resolve()
+      .then(function () {
+        if (txChar.properties && txChar.properties.writeWithoutResponse) {
+          return txChar.writeValueWithoutResponse(data);
+        }
+        return txChar.writeValue(data);
+      })
+      .catch(function () { return txChar.writeValue(data); });
   }
 
   var chain = Promise.resolve();
@@ -238,25 +255,66 @@
   /* ------------------------------------------------------------------ *
    *  连接 / 断开
    * ------------------------------------------------------------------ */
-  /* 遍历所有能访问的服务，自己找"可写特征值"，不写死 FFE1 */
+  /* 先按常见 UUID 精确找（Bluefy 之类实现不全的浏览器也能用），都不行再枚举 */
   async function pickChannel(server) {
-    var svcs = await server.getPrimaryServices();
-    var desc = [];
     var i, j;
-    for (i = 0; i < svcs.length; i++) {
-      var chs = [];
-      try { chs = await svcs[i].getCharacteristics(); } catch (e) { chs = []; }
-      var part = [];
-      for (j = 0; j < chs.length; j++) {
-        var p = chs[j].properties || {};
-        part.push(shortUuid(chs[j].uuid) + '(' + propStr(p) + ')');
-        if (!txChar && (p.write || p.writeWithoutResponse)) { txChar = chs[j]; }
-        if (!rxChar && p.notify) { rxChar = chs[j]; }
+
+    for (i = 0; i < KNOWN.length; i++) {
+      var svc = null;
+      try {
+        svc = await server.getPrimaryService(KNOWN[i].svc);
+      } catch (e1) {
+        continue;                       /* 没有这个服务，试下一个 */
       }
-      desc.push(shortUuid(svcs[i].uuid) + ':' + part.join(' '));
+      if (!svc) { continue; }
+
+      /* 同名服务里找标准特征值 */
+      try {
+        var c = await svc.getCharacteristic(KNOWN[i].chr);
+        if (c) {
+          txChar = c;
+          rxChar = c;
+          diagText = '命中 ' + shortUuid(svc.uuid) + '+' + shortUuid(c.uuid);
+          logLine(diagText);
+          return true;
+        }
+      } catch (e2) { /* 特征值名不一样，下面枚举 */ }
+
+      try {
+        var list = await svc.getCharacteristics();
+        for (j = 0; j < list.length; j++) {
+          var p = list[j].properties || {};
+          if (!txChar && (p.write || p.writeWithoutResponse)) { txChar = list[j]; }
+          if (!rxChar && p.notify) { rxChar = list[j]; }
+        }
+        if (txChar) {
+          diagText = '命中 ' + shortUuid(svc.uuid) + ' 服务，用 ' + shortUuid(txChar.uuid);
+          logLine(diagText);
+          return true;
+        }
+      } catch (e3) { /* 枚举失败，继续下一个服务 */ }
     }
-    diagText = (device && device.name ? device.name + '｜' : '') +
-               '服务 ' + desc.join(' | ');
+
+    /* 兜底：枚举所有服务 */
+    try {
+      var svcs = await server.getPrimaryServices();
+      var desc = [];
+      for (i = 0; i < svcs.length; i++) {
+        var chs = [];
+        try { chs = await svcs[i].getCharacteristics(); } catch (e) { chs = []; }
+        var part = [];
+        for (j = 0; j < chs.length; j++) {
+          var q = chs[j].properties || {};
+          part.push(shortUuid(chs[j].uuid) + '(' + propStr(q) + ')');
+          if (!txChar && (q.write || q.writeWithoutResponse)) { txChar = chs[j]; }
+          if (!rxChar && q.notify) { rxChar = chs[j]; }
+        }
+        desc.push(shortUuid(svcs[i].uuid) + ':' + part.join(' '));
+      }
+      diagText = '服务 ' + desc.join(' | ');
+    } catch (e4) {
+      diagText = '枚举服务失败：' + (e4 && e4.message ? e4.message : e4);
+    }
     logLine(diagText);
     return txChar !== null;
   }
@@ -277,6 +335,42 @@
   function setStep(s) {
     stepName = s;
     logLine('… ' + s);
+  }
+
+  /* 依次尝试不同的筛选方式：先"列出全部"，不行再按名字前缀过滤 */
+  async function pickDevice() {
+    var ua = navigator.userAgent || '';
+    var isIOS = /iPhone|iPad|iPod/i.test(ua);
+
+    var tries = [
+      { acceptAllDevices: true, optionalServices: SERVICES }
+    ];
+
+    if (isIOS) {
+      /* Bluefy 上 acceptAllDevices 可能直接报错，准备好名字过滤兜底 */
+      tries.push({
+        filters: [
+          { namePrefix: 'HC' }, { namePrefix: 'SH' }, { namePrefix: 'HM' },
+          { namePrefix: 'AT' }, { namePrefix: 'BT' }, { namePrefix: 'JDY' },
+          { namePrefix: 'CC41' }, { namePrefix: 'MLT' }, { namePrefix: 'DSD' },
+          { namePrefix: 'BLE' }, { namePrefix: 'Serial' }, { namePrefix: 'UART' },
+          { services: [UUID_FFE0] }, { services: [UUID_FFF0] }
+        ],
+        optionalServices: SERVICES
+      });
+    }
+
+    var lastErr = null;
+    for (var i = 0; i < tries.length; i++) {
+      try {
+        return await navigator.bluetooth.requestDevice(tries[i]);
+      } catch (e) {
+        lastErr = e;
+        if (e && e.name === 'NotFoundError') { throw e; }   /* 用户取消，不再重试 */
+        logLine('第 ' + (i + 1) + ' 种筛选失败，换一种…');
+      }
+    }
+    throw lastErr;
   }
 
   async function connect() {
@@ -301,10 +395,7 @@
     try {
       setChip('正在搜索设备…');
       setStep('选择设备');
-      device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: SERVICES
-      });
+      device = await pickDevice();
       device.addEventListener('gattserverdisconnected', onDisconnected);
       diagText = '设备：' + (device.name || '?') + '（id ' + String(device.id || '').slice(0, 17) + '）';
 
@@ -326,6 +417,7 @@
 
       setChip('正在找串口服务…');
       setStep('读取服务与特征值');
+      await new Promise(function (r) { setTimeout(r, 300); });   /* iOS 连上后要缓一下 */
       var ok = await pickChannel(server);
       if (!ok) {
         throw new Error('模块里没有"可写"的特征值（见下面服务列表）');
@@ -353,14 +445,24 @@
       send(steerMode === 'servo' ? 'M1\r\n' : 'M0\r\n');
     } catch (err) {
       if (err && err.name === 'NotFoundError' && stepName === '选择设备') {
-        setChip('已取消');
+        setChip('没选设备 / 列表为空', 'bad');
+        showFail('没选到设备',
+          '要么你取消了，要么过滤条件没匹配到你的模块。\n' +
+          'Bluefy 里这个模块显示的名字是什么？告诉我，我把它加进过滤器。');
         return;
       }
       console.warn(err);
+      var isNum = (typeof err === 'number');
       var info = '步骤：' + (stepName || '?') + '\n' +
-                 '错误：' + ((err && err.name) || 'exception') + ' - ' +
-                 ((err && err.message) ? err.message : String(err));
-      if (err && err.code !== undefined) { info += '（code ' + err.code + '）'; }
+                 '错误：' + (isNum
+                   ? ('Bluefy 错误码 ' + err)
+                   : (((err && err.name) || 'exception') + ' - ' +
+                      ((err && err.message) ? err.message : String(err))));
+      if (isNum) {
+        info += '\n提示：① 设置 → Bluefy → 蓝牙 权限打开；② 系统蓝牙开关打开；' +
+                '③ 模块名不在 HC/HM/AT/BT/JDY 前缀里的话告诉我实际名字。';
+      }
+      if (err && err.code !== undefined && !isNum) { info += '（code ' + err.code + '）'; }
       if (err && err.stack) {
         var st = String(err.stack).split('\n');
         if (st.length > 1) { info += '\n' + st[1].trim().slice(0, 90); }
