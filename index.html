@@ -27,7 +27,7 @@
   .wrap{
     width:100%;max-width:460px;min-height:100%;
     padding:calc(14px + env(safe-area-inset-top)) 18px calc(18px + env(safe-area-inset-bottom));
-    display:flex;flex-direction:column;align-items:center;gap:10px;
+    display:flex;flex-direction:column;align-items:center;gap:8px;
   }
   h1{
     margin:2px 0 0;font-size:21px;font-weight:700;letter-spacing:.5px;
@@ -72,7 +72,7 @@
   }
 
   .stage{
-    position:relative;width:100%;max-width:360px;aspect-ratio:1/1;margin-top:4px;
+    position:relative;width:100%;max-width:330px;aspect-ratio:1/1;margin-top:2px;
   }
   .stage::after{
     content:"";position:absolute;inset:6%;border-radius:50%;
@@ -105,6 +105,17 @@
     white-space:nowrap;
   }
   .tools button:active{background:rgba(255,255,255,.14)}
+
+  .tune{width:100%;display:grid;grid-template-columns:1fr;gap:6px;margin-top:2px}
+  .tune label{
+    display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim);
+    background:var(--card);border:1px solid var(--line);border-radius:12px;padding:5px 10px;
+    min-width:0;
+  }
+  .tune label span{white-space:nowrap;flex:0 0 auto}
+  .tune label.off{opacity:.4}
+  .tune input{flex:1 1 auto;width:100%;min-width:0;height:16px;accent-color:#8b8cf0}
+  .tune b{color:#cfd8ee;font-size:11.5px;min-width:22px;text-align:right;font-variant-numeric:tabular-nums;flex:0 0 auto}
 
   .tips{margin:6px 0 0;font-size:12.5px;line-height:1.75;color:var(--dim);text-align:center}
   .tips .k{color:#cfd8ee}
@@ -145,6 +156,11 @@
     <div class="cell"><span>左右输出</span><b id="out">0 / 0</b></div>
   </div>
 
+  <div class="tune">
+    <label><span>转向力度</span><input id="gain" type="range" min="30" max="100" step="5" value="75"><b id="gainV">75</b></label>
+    <label><span>直线微调</span><input id="trim" type="range" min="-15" max="15" step="1" value="0"><b id="trimV">0</b></label>
+  </div>
+
   <div class="tools">
     <button data-cmd="A40">舵机左</button>
     <button data-cmd="A90">舵机中</button>
@@ -153,10 +169,11 @@
   </div>
 
   <p class="tips">
-    推上 = <span class="k">前进四档</span>（按行程四等分）· 推下 = <span class="k">倒车四档</span><br>
+    推上 = <span class="k">前进</span>（越推越快）· 推下 = <span class="k">倒车</span> · 松手 = 停<br>
     <span class="k">舵机转向</span>：左右推 = 打方向盘（两轮同速，像真车）<br>
-    <span class="k">差速转向</span>：左右推 = 左右轮差速（能原地转）· 松手 = 停<br>
-    蓝牙断开后固件 1.5 秒自动刹车 · 安卓用 Chrome，iPhone 用 <span class="k">Bluefy</span>
+    <span class="k">差速转向</span>：左右推 = 差速，只左右推能原地转<br>
+    下面两个滑块调手感：转向太急就往左拉，车跑偏就调直线微调<br>
+    蓝牙断开后 1.5 秒自动刹车 · 安卓 Chrome / iPhone <span class="k">Bluefy</span>
   </p>
 
   <div id="log" class="log">未连接 …</div>
@@ -177,6 +194,46 @@
 
   /* 'servo' = 舵机转向（默认）  'diff' = 差速转向 */
   var steerMode = 'servo';
+
+  /* 差速手感参数：转向力度、直线微调（可调，存在浏览器里） */
+  var steerGain = 75;
+  var trimPct = 0;
+
+  (function initTune() {
+    var g = $('gain'), t = $('trim');
+    var gv = $('gainV'), tv = $('trimV');
+    if (!g || !t) { return; }
+    try {
+      if (localStorage.getItem('car_gain')) { steerGain = parseInt(localStorage.getItem('car_gain'), 10) || 75; }
+      if (localStorage.getItem('car_trim')) { trimPct = parseInt(localStorage.getItem('car_trim'), 10) || 0; }
+    } catch (e) {}
+    g.value = steerGain;
+    gv.textContent = steerGain;
+    t.value = trimPct;
+    tv.textContent = trimPct;
+    g.addEventListener('input', function () {
+      steerGain = parseInt(g.value, 10);
+      gv.textContent = steerGain;
+      try { localStorage.setItem('car_gain', steerGain); } catch (e) {}
+    });
+    t.addEventListener('input', function () {
+      trimPct = parseInt(t.value, 10);
+      tv.textContent = trimPct;
+      try { localStorage.setItem('car_trim', trimPct); } catch (e) {}
+    });
+    syncTuneMode();
+  })();
+
+  /* 这两个滑块只作用于差速模式，舵机模式置灰（舵机保持原样不动） */
+  function syncTuneMode() {
+    var off = (steerMode === 'servo');
+    ['gain', 'trim'].forEach(function (id) {
+      var el = $(id);
+      if (!el) { return; }
+      if (el.parentNode) { el.parentNode.classList.toggle('off', off); }
+      el.disabled = off;
+    });
+  }
 
   /* ------------------------------------------------------------------ *
    *  BLE 常量：HC-08 / HM-10 用 FFE0+FFE1，部分模块用 Nordic UART
@@ -511,6 +568,7 @@
       b.classList.add('on');
       steerMode = b.getAttribute('data-mode');
       state.x = 0; state.y = 0;
+      syncTuneMode();
       send(steerMode === 'servo' ? 'M1\r\n' : 'M0\r\n');
     });
   });
@@ -598,11 +656,10 @@
     if (m > 0.10) {
       var mm = Math.min(1, (m - 0.10) / 0.90);     /* 去掉死区后重新归一化 */
       var ay = Math.abs(y) / (m || 1);              /* 前后分量占比 */
-      var ax = Math.abs(x) / (m || 1);
       turn = clamp(x, -1, 1);
 
       if (steerMode === 'servo') {
-        /* 舵机转向：两轮永远同速，左右推只动方向盘 */
+        /* 舵机转向：保持原样（四档油门 + 固定打角 90±42°） */
         ang = 90 + turn * 42;
         if (ay * mm > 0.12) {
           gear = clamp(Math.ceil(Math.abs(y) * 4), 1, 4);
@@ -611,19 +668,38 @@
           r = l;
         }
       } else {
-        /* 差速转向：左右轮一快一慢 */
-        if (ay * mm > 0.10) {
-          gear = clamp(Math.ceil(Math.abs(y) * 4), 1, 4);
-          dir = y >= 0 ? 1 : -1;
-          var base = gear * 25;
-          var k = 0.8;
-          l = dir * base * (1 - k * turn);
-          r = dir * base * (1 + k * turn);
-        } else if (ax * mm > 0.10) {
-          l = -turn * 60;
-          r = turn * 60;
+        /* 差速：连续油门 + 比例转向（不再四档硬切、不再削顶） */
+        var v = clamp(y * mm, -1, 1);            /* 前后 -1..1，连续 */
+        var t = clamp(x, -1, 1) * mm;            /* 左右 -1..1 */
+
+        if (Math.abs(v) < 0.07) {
+          /* 原地转：往右推 => 左轮前进、右轮后退，车头才向右 */
+          var p = Math.min(1, Math.abs(t) / 0.45) * 45;
+          var sg = (t >= 0) ? 1 : -1;
+          l = p * sg;
+          r = -p * sg;
           gear = 0;
           dir = 0;
+        } else {
+          /* 速度越高转向越钝，避免高速甩尾 */
+          var gain = (steerGain / 100) * (1 - 0.35 * Math.abs(v));
+          var dd = t * gain;
+          /* 往右推(t>0) => 左轮加速、右轮减速，车才会向右转 */
+          var nl = v * (1 + dd);
+          var nr = v * (1 - dd);
+          var mx = Math.max(Math.abs(nl), Math.abs(nr));
+          if (mx > 1) { nl /= mx; nr /= mx; }     /* 按比例缩小，保持转向手感一致 */
+          l = nl * 100;
+          r = nr * 100;
+          gear = clamp(Math.ceil(Math.abs(v) * 4), 1, 4);
+          dir = (v >= 0) ? 1 : -1;
+        }
+
+        /* 直线微调：补偿左右电机/摩擦差异，跑偏就往对侧拉 */
+        if (l !== 0 || r !== 0) {
+          var trm = trimPct / 100;
+          l *= (1 + trm);
+          r *= (1 - trm);
         }
       }
     }
